@@ -140,29 +140,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Mode 1: Single CLI Prompt
+    if let Some(prompt_text) = initial_prompt {
+        println!("\n[MitraAI] Processing prompt: {}\n", prompt_text);
+        let formatted_prompt = format!(
+            "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            prompt_text
+        );
+        let prompt_tokens = tokenizer.encode(&formatted_prompt);
+        let mut logits = vec![0.0f32; config.vocab_size];
+        kv_cache.reset();
+
+        let prefill_start = Instant::now();
+        for (pos, &token) in prompt_tokens.iter().enumerate() {
+            let is_last = pos == prompt_tokens.len() - 1;
+            model.forward_token(token, pos, &mut kv_cache, &mut logits, is_last);
+        }
+        let prefill_time = prefill_start.elapsed();
+
+        let max_gen_tokens = 256;
+        let mut current_pos = prompt_tokens.len();
+        let mut generated_tokens = Vec::new();
+
+        print!("MitraAI > ");
+        io::stdout().flush()?;
+
+        let gen_start = Instant::now();
+        for _ in 0..max_gen_tokens {
+            let next_token = sample_next_token(&logits, 0.0, 1);
+            if next_token == 151645 || next_token == 151643 {
+                break;
+            }
+            generated_tokens.push(next_token);
+            let token_text = tokenizer.decode(&[next_token]);
+            print!("{}", token_text);
+            io::stdout().flush()?;
+            model.forward_token(next_token, current_pos, &mut kv_cache, &mut logits, true);
+            current_pos += 1;
+        }
+        let gen_time = gen_start.elapsed();
+        println!();
+
+        let tps = if gen_time.as_secs_f64() > 0.0 {
+            (generated_tokens.len() as f64) / gen_time.as_secs_f64()
+        } else {
+            0.0
+        };
+        println!("\x1b[90m[{:.1} t/s | TTFT: {:.2?} | {} tokens]\x1b[0m", tps, prefill_time, generated_tokens.len());
+        return Ok(());
+    }
+
+    // Mode 2: Interactive REPL Loop
     println!("\n============================================================");
     println!("     MITRAAI INTERACTIVE CHAT MODE (Ketik 'exit' untuk keluar)");
     println!("============================================================\n");
 
-    let mut is_first = true;
     loop {
-        let user_prompt = if is_first && initial_prompt.is_some() {
-            is_first = false;
-            initial_prompt.clone().unwrap()
-        } else {
-            print!("\nAnda > ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
-                continue;
-            }
-            let trimmed = input.trim().to_string();
-            if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
-                println!("[MitraAI] Menutup sesi chat. Sampai jumpa!");
-                break;
-            }
-            trimmed
-        };
+        print!("\nAnda > ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
+            continue;
+        }
+        let trimmed = input.trim().to_string();
+        if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
+            println!("[MitraAI] Menutup sesi chat. Sampai jumpa!");
+            break;
+        }
+        let user_prompt = trimmed;
 
         let formatted_prompt = format!(
             "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
@@ -216,10 +261,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             0.0
         };
         println!("\x1b[90m[{:.1} t/s | TTFT: {:.2?} | {} tokens]\x1b[0m", tps, prefill_time, generated_tokens.len());
-
-        if initial_prompt.is_some() && is_first {
-            break;
-        }
     }
 
     Ok(())
