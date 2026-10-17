@@ -102,7 +102,10 @@ fn sample_token(logits: &[f32], temperature: f32) -> usize {
 }
 
 pub fn handle_client(mut stream: TcpStream, engine: Arc<Mutex<ModelEngine>>) {
-    let mut reader = BufReader::new(&stream);
+    let mut reader = BufReader::new(match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
+    });
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
         return;
@@ -116,16 +119,20 @@ pub fn handle_client(mut stream: TcpStream, engine: Arc<Mutex<ModelEngine>>) {
     let method = parts[0];
     let path = parts[1];
 
-    // Read headers
+    // Read headers until empty line \r\n
     let mut content_length = 0usize;
     loop {
         let mut header_line = String::new();
-        if reader.read_line(&mut header_line).is_err() || header_line.trim().is_empty() {
+        if reader.read_line(&mut header_line).is_err() {
             break;
         }
-        let lower = header_line.to_lowercase();
+        let trimmed = header_line.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        let lower = trimmed.to_lowercase();
         if lower.starts_with("content-length:") {
-            if let Some(val) = header_line.split(':').nth(1) {
+            if let Some(val) = trimmed.split(':').nth(1) {
                 content_length = val.trim().parse().unwrap_or(0);
             }
         }
