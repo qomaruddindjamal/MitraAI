@@ -139,6 +139,7 @@ pub fn handle_client(mut stream: TcpStream, engine: Arc<Mutex<ModelEngine>>) {
             Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
             Content-Length: 0\r\n\r\n";
         let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
         return;
     }
 
@@ -160,6 +161,7 @@ pub fn handle_client(mut stream: TcpStream, engine: Arc<Mutex<ModelEngine>>) {
             body
         );
         let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
         return;
     }
 
@@ -345,12 +347,14 @@ pub fn handle_client(mut stream: TcpStream, engine: Arc<Mutex<ModelEngine>>) {
         );
 
         let _ = stream.write_all(http_response.as_bytes());
+        let _ = stream.flush();
         return;
     }
 
     // 404 for unknown endpoints
     let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
     let _ = stream.write_all(not_found.as_bytes());
+    let _ = stream.flush();
 }
 
 pub fn start_server(
