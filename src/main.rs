@@ -1,6 +1,7 @@
 pub mod config;
 pub mod model;
 pub mod safetensors;
+pub mod server;
 pub mod tensor;
 pub mod tokenizer;
 
@@ -107,62 +108,119 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         4096,
     );
 
-    // Prompt evaluasi
-    let user_prompt = "Hello! Siapa kamu?";
-    let formatted_prompt = format!(
-        "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-        user_prompt
-    );
+    // Check CLI argument first: --serve or normal prompt / interactive REPL
+    let args: Vec<String> = std::env::args().collect();
+    let is_serve_mode = args.iter().any(|a| a == "--serve" || a == "-s")
+        || std::env::var("PORT").is_ok();
 
-    println!("\n[MitraAI] Prompt Input:\n{}", formatted_prompt);
-    let prompt_tokens = tokenizer.encode(&formatted_prompt);
-    println!("[MitraAI] Prompt Tokens ({} tokens): {:?}", prompt_tokens.len(), prompt_tokens);
+    if is_serve_mode {
+        let port: u16 = std::env::var("PORT")
+            .unwrap_or_else(|_| "8080".to_string())
+            .parse()
+            .unwrap_or(8080);
+        let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
 
-    let mut logits = vec![0.0f32; config.vocab_size];
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(crate::server::ModelEngine {
+            model,
+            tokenizer,
+            config,
+            kv_cache,
+        }));
 
-    // Prefill KV Cache
-    println!("[MitraAI] Prefilling KV cache...");
-    let prefill_start = Instant::now();
-    for (pos, &token) in prompt_tokens.iter().enumerate() {
-        let is_last = pos == prompt_tokens.len() - 1;
-        model.forward_token(token, pos, &mut kv_cache, &mut logits, is_last);
+        println!("\n============================================================");
+        println!("     MITRAAI NATIVE API SERVER — OPENAI COMPATIBLE          ");
+        println!("============================================================");
+        crate::server::start_server(&host, port, engine)?;
+        return Ok(());
     }
-    let prefill_time = prefill_start.elapsed();
-    println!("[MitraAI] Time to First Token (TTFT): {:.2?}", prefill_time);
 
-    // Autoregressive generation
-    let max_gen_tokens = 64;
-    let mut current_pos = prompt_tokens.len();
-    let mut generated_tokens = Vec::new();
+    let initial_prompt = if args.len() > 1 {
+        Some(args[1..].join(" "))
+    } else {
+        None
+    };
 
-    print!("[MitraAI Output]: ");
-    io::stdout().flush()?;
+    println!("\n============================================================");
+    println!("     MITRAAI INTERACTIVE CHAT MODE (Ketik 'exit' untuk keluar)");
+    println!("============================================================\n");
 
-    let gen_start = Instant::now();
-    for _ in 0..max_gen_tokens {
-        let next_token = sample_next_token(&logits, 0.0, 1); // greedy decoding
-        if next_token == 151645 || next_token == 151643 {
-            // <|im_end|> or <|endoftext|>
-            break;
+    let mut is_first = true;
+    loop {
+        let user_prompt = if is_first && initial_prompt.is_some() {
+            is_first = false;
+            initial_prompt.clone().unwrap()
+        } else {
+            print!("\nAnda > ");
+            io::stdout().flush()?;
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
+                continue;
+            }
+            let trimmed = input.trim().to_string();
+            if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
+                println!("[MitraAI] Menutup sesi chat. Sampai jumpa!");
+                break;
+            }
+            trimmed
+        };
+
+        let formatted_prompt = format!(
+            "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            user_prompt
+        );
+
+        let prompt_tokens = tokenizer.encode(&formatted_prompt);
+        let mut logits = vec![0.0f32; config.vocab_size];
+
+        // Reset KV Cache untuk setiap turn percakapan
+        kv_cache.reset();
+
+        // Prefill KV Cache
+        let prefill_start = Instant::now();
+        for (pos, &token) in prompt_tokens.iter().enumerate() {
+            let is_last = pos == prompt_tokens.len() - 1;
+            model.forward_token(token, pos, &mut kv_cache, &mut logits, is_last);
         }
+        let prefill_time = prefill_start.elapsed();
 
-        generated_tokens.push(next_token);
-        let token_text = tokenizer.decode(&[next_token]);
-        print!("{}", token_text);
+        // Autoregressive generation
+        let max_gen_tokens = 256;
+        let mut current_pos = prompt_tokens.len();
+        let mut generated_tokens = Vec::new();
+
+        print!("MitraAI > ");
         io::stdout().flush()?;
 
-        model.forward_token(next_token, current_pos, &mut kv_cache, &mut logits, true);
-        current_pos += 1;
-    }
-    let gen_time = gen_start.elapsed();
-    println!("\n");
+        let gen_start = Instant::now();
+        for _ in 0..max_gen_tokens {
+            let next_token = sample_next_token(&logits, 0.0, 1); // greedy decoding
+            if next_token == 151645 || next_token == 151643 {
+                // <|im_end|> or <|endoftext|>
+                break;
+            }
 
-    let tps = (generated_tokens.len() as f64) / gen_time.as_secs_f64();
-    println!("------------------------------------------------------------");
-    println!("Tokens generated: {}", generated_tokens.len());
-    println!("Generation time: {:.2?}", gen_time);
-    println!("Tokens Per Second (TPS): {:.2} tokens/s", tps);
-    println!("------------------------------------------------------------");
+            generated_tokens.push(next_token);
+            let token_text = tokenizer.decode(&[next_token]);
+            print!("{}", token_text);
+            io::stdout().flush()?;
+
+            model.forward_token(next_token, current_pos, &mut kv_cache, &mut logits, true);
+            current_pos += 1;
+        }
+        let gen_time = gen_start.elapsed();
+        println!();
+
+        let tps = if gen_time.as_secs_f64() > 0.0 {
+            (generated_tokens.len() as f64) / gen_time.as_secs_f64()
+        } else {
+            0.0
+        };
+        println!("\x1b[90m[{:.1} t/s | TTFT: {:.2?} | {} tokens]\x1b[0m", tps, prefill_time, generated_tokens.len());
+
+        if initial_prompt.is_some() && is_first {
+            break;
+        }
+    }
 
     Ok(())
 }

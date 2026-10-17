@@ -1,0 +1,36 @@
+name: MitraAI API Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Prompt pertanyaan untuk MitraAI'
+        required: true
+        default: 'Halo siapa kamu dan jelaskan kemampuanmu?'
+
+jobs:
+  run-inference:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository with Git LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run MitraAI Inference on GitHub Cloud
+        run: |
+          cargo run --release -- "${{ github.event.inputs.prompt }}"
