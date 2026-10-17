@@ -13,9 +13,9 @@ WORKDIR /app
 COPY --from=builder /usr/src/mitra_ai/target/release/mitra_ai /app/mitra_ai
 COPY models /app/models
 
-ENV PORT=8080
+ENV PORT=1234
 ENV HOST=0.0.0.0
 
-EXPOSE 8080
+EXPOSE 1234
 
 CMD ["/app/mitra_ai", "--serve"]

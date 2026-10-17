@@ -114,10 +114,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         || std::env::var("PORT").is_ok();
 
     if is_serve_mode {
-        let port: u16 = std::env::var("PORT")
-            .unwrap_or_else(|_| "8080".to_string())
+        let mut port: u16 = std::env::var("PORT")
+            .unwrap_or_else(|_| "1234".to_string())
             .parse()
-            .unwrap_or(8080);
+            .unwrap_or(1234);
+
+        for i in 0..args.len() {
+            if (args[i] == "--port" || args[i] == "-p") && i + 1 < args.len() {
+                if let Ok(p) = args[i + 1].parse::<u16>() {
+                    port = p;
+                }
+            }
+        }
         let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
 
         let engine = std::sync::Arc::new(std::sync::Mutex::new(crate::server::ModelEngine {
